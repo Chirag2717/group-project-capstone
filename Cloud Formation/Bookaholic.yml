@@ -1,0 +1,405 @@
+Resources:
+  ## VPC
+  BookaholicVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16      
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: Bookaholic VPC
+
+  ## SUBNETS
+  BookaholicPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref BookaholicVPC
+      AvailabilityZone: us-east-1a
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: Bookaholic PublicSubnet
+
+  BookaholicPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref BookaholicVPC
+      AvailabilityZone: us-east-1a
+      CidrBlock: 10.0.3.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: Bookaholic PrivateSubnet
+
+  ## INTERNET GATEWAY
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  GatewayToInternet:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref BookaholicVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  ## PUBLIC ROUTING
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref BookaholicVPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayToInternet
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref BookaholicPublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  ## NAT GATEWAY
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    DependsOn: NatPublicIP
+    Properties:
+      SubnetId: !Ref BookaholicPublicSubnet
+      AllocationId: !GetAtt NatPublicIP.AllocationId
+
+  ## ELASTIC IP
+  NatPublicIP:
+    Type: AWS::EC2::EIP
+    DependsOn: BookaholicVPC
+    Properties:
+      Domain: vpc
+
+  ## PRIVATE ROUTING
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref BookaholicVPC
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      NatGatewayId: !Ref NatGateway
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref BookaholicPrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  ## Security Groups
+  FrontEndSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Enable SSH, HTTP, HTTPS and custom TCP from 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref BookaholicVPC
+
+  BackEndSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Enable custom TCP from public ec2
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref FrontEndSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref FrontEndSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref FrontEndSecurityGroup
+      VpcId: !Ref BookaholicVPC
+
+  ## EC2 instances
+  PublicInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      KeyName: Bookaholic
+      ImageId: ami-04505e74c0741db8d
+      InstanceType: t2.micro
+      SubnetId: !Ref BookaholicPublicSubnet
+      SecurityGroupIds:
+        - !Ref FrontEndSecurityGroup
+      Tags:
+        - Key: Name
+          Value: Bookaholic FrontEnd
+          
+  PublicElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: ec2-instance
+      InstanceId: !Ref PublicInstance
+      Tags:
+        - Key: Name
+          Value: Bookaholic FrontEnd ElasticIP
+
+  PrivateInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      KeyName: Bookaholic
+      ImageId: ami-04505e74c0741db8d
+      InstanceType: t2.micro
+      SubnetId: !Ref BookaholicPrivateSubnet
+      SecurityGroupIds:
+        - !Ref BackEndSecurityGroup
+      Tags:
+        - Key: Name
+          Value: Bookaholic BackEnd
+
+  ## DynamoDB
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "email"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "email"
+          KeyType: "HASH"
+      TableName: "users"
+      ProvisionedThroughput:
+        ReadCapacityUnits: "5"
+        WriteCapacityUnits: "5"
+
+  BooksTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "id"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "id"
+          KeyType: "HASH"
+      TableName: "books"
+      ProvisionedThroughput:
+        ReadCapacityUnits: "5"
+        WriteCapacityUnits: "5"
+
+  IssuedBooksTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "email"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "email"
+          KeyType: "HASH"
+      TableName: "booksIssued"
+      ProvisionedThroughput:
+        ReadCapacityUnits: "5"
+        WriteCapacityUnits: "5"
+
+  ## S3Bucket
+  BookaholicImageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: bookaholic-image-final-repo
+      AccessControl: BucketOwnerFullControl
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: BookaholicImageBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action: "*"
+            Effect: Allow
+            Resource:
+              - Fn::GetAtt:
+                  - BookaholicImageBucket
+                  - Arn
+              - Fn::Join:
+                  - ""
+                  - - Fn::GetAtt:
+                        - BookaholicImageBucket
+                        - Arn
+                    - /*
+            Principal:
+              AWS: "*"
+            Condition:
+              StringEquals:
+                s3:DataAccessPointAccount:
+                  Ref: AWS::AccountId
+
+  S3GatewayEndpoint:
+   Type: 'AWS::EC2::VPCEndpoint'
+   Properties:
+    PolicyDocument:
+      Version: 2012-10-17
+      Statement:
+        - Effect: Allow
+          Principal: '*'
+          Action:
+            - 's3:GetObject'
+          Resource:
+            - 'arn:aws:s3:::bookaholic-image-final-repo/*'
+    RouteTableIds:
+      - !Ref PrivateRouteTable
+    ServiceName: !Sub 'com.amazonaws.us-east-1.s3'
+    VpcId: !Ref BookaholicVPC
+    
+  S3AccessPoint:
+    Type: AWS::S3::AccessPoint
+    Properties:
+      Bucket:
+        Ref: BookaholicImageBucket
+      Name: s3-access-point-new
+      VpcConfiguration:
+        VpcId:
+          Ref: BookaholicVPC
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+
+  DynamoDBEndpoint:
+    Type: "AWS::EC2::VPCEndpoint"
+    Properties:
+      RouteTableIds:
+        - !Ref PublicRouteTable
+        - !Ref PrivateRouteTable
+      ServiceName:
+        !Sub "com.amazonaws.us-east-1.dynamodb"
+      VpcId: !Ref BookaholicVPC
+
+
+  ## Cognito
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: "usersPool"
+      UsernameAttributes:
+        - email
+      UsernameConfiguration:
+        CaseSensitive: False
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: False
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: True
+          RequireUppercase: True
+          RequireSymbols: True
+          RequireNumbers: True
+      Schema:
+        - AttributeDataType: "String"
+          Mutable: False
+          Name: "email"
+          Required: True
+        - AttributeDataType: "String"
+          Mutable: False
+          Name: "phone_number"
+          Required: True
+      AutoVerifiedAttributes:
+        - email
+      VerificationMessageTemplate:
+        DefaultEmailOption: "CONFIRM_WITH_CODE"
+      LambdaConfig:
+        PostConfirmation: "arn:aws:lambda:us-east-1:979332226810:function:insertusersfuncton"
+  CognitoClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: bookaholic-cognito-client
+      GenerateSecret: False
+      UserPoolId: !Ref CognitoUserPool
+      RefreshTokenValidity: 30
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      SupportedIdentityProviders:
+        - COGNITO
+      ExplicitAuthFlows:
+        - ALLOW_CUSTOM_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: True
+  CognitoDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: bookaholic-new
+      UserPoolId: !Ref CognitoUserPool
+
+  ## Lambda
+  SignupLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: nodejs12.x
+      FunctionName: "insertusersfuncton"
+      Role: "arn:aws:iam::979332226810:role/LabRole"
+      Handler: index.handler
+      Code:
+        ZipFile: |
+          const AWS = require("aws-sdk");
+          exports.handler = async (event, context) => {
+            const dynamo = new AWS.DynamoDB();
+            const region = "us-east-1";
+            AWS.config.update({region: region});
+            if (event.request.userAttributes.sub) {
+              let databaseConfig = {
+              Item: {
+                'email': {S: event.request.userAttributes.email},
+                'contactNumber': {S: event.request.userAttributes.phone_number},
+              },
+              TableName: 'users'
+            };
+            try {
+              await dynamo.putItem(databaseConfig).promise()
+              console.log("Passed");
+            } catch (err) {
+              console.log("Error", err);
+            }
+              context.done(null, event);
+            }
+          }
+      Description: Create users on signup
+      TracingConfig:
+        Mode: Active
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref BackEndSecurityGroup
+        SubnetIds:
+          - !Ref BookaholicPrivateSubnet
